@@ -1,0 +1,188 @@
+services:
+  postiz:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        NEXT_PUBLIC_FRONTEND_URL: 'http://localhost:4007'
+        NEXT_PUBLIC_INTERNAL_FRONTEND_URL: 'http://localhost:5000'
+    image: postiz-app:local
+    container_name: postiz
+    restart: always
+    environment:
+      MAIN_URL: 'http://localhost:4007'
+      FRONTEND_URL: 'http://localhost:4007'
+      NEXT_PUBLIC_BACKEND_URL: 'http://localhost:4007/api'
+      # 容器内部请求本应用时使用，解决 ECONNREFUSED 127.0.0.1:4007
+      INTERNAL_FRONTEND_URL: 'http://localhost:5000'
+      NEXT_PUBLIC_INTERNAL_FRONTEND_URL: 'http://localhost:5000'
+      NEXT_PUBLIC_FRONTEND_URL: 'http://localhost:4007'
+      NEXT_PUBLIC_OPENCUT_URL: 'http://host.docker.internal:3001'
+      # 联调 short_video 时配置，指向 short_video 后端（宿主机 8000）
+      SHORT_VIDEO_API_URL: 'http://host.docker.internal:8000'
+      JWT_SECRET: 'random string that is unique to every install - just type random characters here!'
+      DATABASE_URL: 'postgresql://postiz-user:postiz-password@postiz-postgres:5432/postiz-db-local'
+      REDIS_URL: 'redis://postiz-redis:6379'
+      BACKEND_INTERNAL_URL: 'http://localhost:3000'
+      TEMPORAL_ADDRESS: "temporal:7233"
+      IS_GENERAL: 'true'
+      DISABLE_REGISTRATION: 'false'
+      RUN_CRON: 'true'
+      STORAGE_PROVIDER: 'local'
+      UPLOAD_DIRECTORY: '/uploads'
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: '/uploads'
+      X_API_KEY: ''
+      X_API_SECRET: ''
+      LINKEDIN_CLIENT_ID: ''
+      LINKEDIN_CLIENT_SECRET: ''
+      REDDIT_CLIENT_ID: ''
+      REDDIT_CLIENT_SECRET: ''
+      GITHUB_CLIENT_ID: ''
+      GITHUB_CLIENT_SECRET: ''
+      YOUTUBE_CLIENT_ID: ''
+      YOUTUBE_CLIENT_SECRET: ''
+      OPENAI_BASE_URL: ''
+      OPENAI_API_KEY: ''
+      API_LIMIT: 30
+      NX_ADD_PLUGINS: 'false'
+    volumes:
+      - postiz-config:/config/
+      - postiz-uploads:/uploads/
+    ports:
+      - "4007:5000"
+    networks:
+      - postiz-network
+      - temporal-network
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+
+  postiz-postgres:
+    image: postgres:17-alpine
+    container_name: postiz-postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: postiz-password
+      POSTGRES_USER: postiz-user
+      POSTGRES_DB: postiz-db-local
+    volumes:
+      - postgres-volume:/var/lib/postgresql/data
+    networks:
+      - postiz-network
+    healthcheck:
+      test: pg_isready -U postiz-user -d postiz-db-local
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postiz-redis:
+    image: redis:7.2
+    container_name: postiz-redis
+    restart: always
+    healthcheck:
+      test: redis-cli ping
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - postiz-redis-data:/data
+    networks:
+      - postiz-network
+
+  spotlight:
+    pull_policy: always
+    container_name: spotlight
+    ports:
+      - 8969:8969/tcp
+    image: ghcr.io/getsentry/spotlight:latest
+    networks:
+      - postiz-network
+
+  temporal-elasticsearch:
+    container_name: temporal-elasticsearch
+    image: elasticsearch:7.17.27
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    networks:
+      - temporal-network
+    expose:
+      - 9200
+    volumes:
+      - /var/lib/elasticsearch/data
+
+  temporal-postgresql:
+    container_name: temporal-postgresql
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+    networks:
+      - temporal-network
+    expose:
+      - 5432
+    volumes:
+      - /var/lib/postgresql/data
+
+  temporal:
+    container_name: temporal
+    ports:
+      - '7233:7233'
+    image: temporalio/auto-setup:1.28.1
+    depends_on:
+      - temporal-postgresql
+      - temporal-elasticsearch
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=temporal-elasticsearch
+      - ES_VERSION=v7
+      - TEMPORAL_NAMESPACE=default
+    networks:
+      - temporal-network
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    labels:
+      kompose.volume.type: configMap
+
+  temporal-ui:
+    container_name: temporal-ui
+    image: temporalio/ui:2.34.0
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://127.0.0.1:3000
+    networks:
+      - temporal-network
+    ports:
+      - '8080:8080'
+
+volumes:
+  postgres-volume:
+    external: false
+  postiz-redis-data:
+    external: false
+  postiz-config:
+    external: false
+  postiz-uploads:
+    external: false
+
+networks:
+  postiz-network:
+    external: false
+  temporal-network:
+    driver: bridge
+    name: temporal-network

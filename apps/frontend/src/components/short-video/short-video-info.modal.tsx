@@ -14,6 +14,15 @@ import { PersonaEditModal } from './persona-edit-modal';
 
 type ShortVideoTaskStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
+interface TaskStepItem {
+  step_name: string;
+  status: string;
+  error_message?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
 interface ShortVideoTask {
   id: string;
   idea?: string;
@@ -31,6 +40,7 @@ interface ShortVideoTask {
   targetPlatform?: string;
   contentType?: string;
   progress?: { percentage?: number; current_step?: string | null };
+  steps?: TaskStepItem[];
 }
 
 interface IntegrationInfo {
@@ -206,6 +216,17 @@ export const ShortVideoInfoModal: FC<{
       const list = (data?.tasks ?? data?.items ?? []) || [];
       const rows = list.map((task: Record<string, unknown>) => {
         const p = task.progress as Record<string, unknown> | undefined;
+        const rawSteps = task.steps as Array<Record<string, unknown>> | undefined;
+        const steps: TaskStepItem[] = Array.isArray(rawSteps)
+          ? rawSteps.map((s) => ({
+              step_name: String(s.step_name ?? ''),
+              status: String(s.status ?? ''),
+              error_message: s.error_message ? String(s.error_message) : null,
+              created_at: s.created_at ? String(s.created_at) : null,
+              started_at: s.started_at ? String(s.started_at) : null,
+              completed_at: s.completed_at ? String(s.completed_at) : null,
+            }))
+          : [];
         return {
           id: String(task.id ?? ''),
           idea: task.idea ? String(task.idea) : undefined,
@@ -223,6 +244,7 @@ export const ShortVideoInfoModal: FC<{
           targetPlatform: task.target_platform ? String(task.target_platform) : undefined,
           contentType: task.content_type ? String(task.content_type) : undefined,
           progress: p ? { percentage: p.percentage as number, current_step: p.current_step as string | null } : undefined,
+          steps,
         };
       });
       setTasks(rows);
@@ -774,10 +796,32 @@ export const ShortVideoInfoModal: FC<{
                         {task.completedAt && (
                           <span>{t('completed', '完成')}: {formatDateTime(task.completedAt)}</span>
                         )}
-                        {typeof task.cost === 'number' && task.cost > 0 && (
+                        {typeof task.cost === 'number' && (
                           <span>{t('cost', '成本')}: ${task.cost.toFixed(4)}</span>
                         )}
                       </div>
+                      {task.steps && task.steps.length > 0 && (
+                        <div className="flex flex-col gap-[4px]">
+                          <span className="text-[11px] text-textItemBlur">{t('short_video_steps', '步骤')}:</span>
+                          <div className="flex flex-wrap gap-x-[8px] gap-y-[4px]">
+                            {task.steps.map((s, idx) => (
+                              <span
+                                key={`${s.step_name}-${idx}`}
+                                className={clsx(
+                                  'px-[6px] py-[2px] rounded-[4px] text-[10px]',
+                                  s.status === 'completed' && 'bg-green-500/20 text-green-400',
+                                  s.status === 'processing' && 'bg-blue-500/20 text-blue-400',
+                                  s.status === 'failed' && 'bg-red-500/20 text-red-400',
+                                  (s.status === 'pending' || !s.status) && 'bg-newBorder/30 text-textItemBlur',
+                                )}
+                                title={s.error_message || undefined}
+                              >
+                                {s.step_name}: {s.status}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

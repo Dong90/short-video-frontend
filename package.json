@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@ag-ui/mastra": "0.2.0",
-    "@ai-sdk/openai": "^2.0.52",
+    "@ai-sdk/openai": "^3.0.26",
     "@atproto/api": "^0.15.15",
     "@aws-sdk/client-s3": "^3.787.0",
     "@aws-sdk/s3-request-presigner": "^3.787.0",

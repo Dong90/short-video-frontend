@@ -70,17 +70,20 @@ export const ToggleSwitch: FC<{
   checked: boolean;
   onChange: (v: boolean) => void;
   label?: string;
-}> = ({ checked, onChange, label }) => (
+  disabled?: boolean;
+}> = ({ checked, onChange, label, disabled }) => (
   <div className="flex items-center justify-between gap-[12px]">
     {label && <span className="text-[12px] text-textItemBlur">{label}</span>}
     <div
       className={clsx(
-        'w-[48px] h-[26px] rounded-full p-[3px] cursor-pointer transition-colors flex items-center',
-        checked ? 'bg-[#612BD3] justify-end' : 'bg-newBorder justify-start'
+        'w-[48px] h-[26px] rounded-full p-[3px] transition-colors flex items-center',
+        checked ? 'bg-[#612BD3] justify-end' : 'bg-newBorder justify-start',
+        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
       )}
-      onClick={() => onChange(!checked)}
+      onClick={() => !disabled && onChange(!checked)}
       role="switch"
       aria-checked={checked}
+      aria-disabled={disabled}
     >
       <div className="w-[20px] h-[20px] rounded-full bg-white flex-shrink-0 transition-all" />
     </div>

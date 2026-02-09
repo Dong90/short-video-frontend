@@ -78,12 +78,16 @@ export class ShortVideoSyncService {
       );
       const items = listRes?.data?.items ?? [];
       if (items.length > 0 && items[0]?.id) {
-        const updateBody = {
+        const cfg = (items[0].config || {}) as Record<string, unknown>;
+        const updateBody: Record<string, unknown> = {
           name: params.name || items[0].name,
-          avatar_url: params.picture ?? items[0].avatar_url,
-          postiz: {
-            organization_id: params.organizationId,
-            integration_id: params.integrationId,
+          config: {
+            ...cfg,
+            postiz: {
+              organization_id: params.organizationId,
+              integration_id: params.integrationId,
+            },
+            avatar_url: params.picture ?? cfg.avatar_url,
           },
         };
         await axios.put(
@@ -98,10 +102,13 @@ export class ShortVideoSyncService {
         name: params.name || `Channel_${String(params.internalId || params.integrationId).slice(0, 16)}`,
         platform,
         status: 'active',
-        avatar_url: params.picture || undefined,
-        postiz: {
-          organization_id: params.organizationId,
-          integration_id: params.integrationId,
+        config: {
+          platform,
+          postiz: {
+            organization_id: params.organizationId,
+            integration_id: params.integrationId,
+          },
+          avatar_url: params.picture || undefined,
         },
       };
 

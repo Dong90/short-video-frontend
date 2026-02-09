@@ -762,6 +762,7 @@ export class ShortVideoController {
     @Query('platform') platform?: string,
     @Query('status') status?: string,
     @Query('integration_id') integrationId?: string,
+    @Query('account_id') accountId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string
   ) {
@@ -769,7 +770,8 @@ export class ShortVideoController {
     const params = new URLSearchParams();
     if (platform) params.set('platform', platform);
     if (status) params.set('status', status);
-    if (integrationId) params.set('integration_id', integrationId);
+    if (integrationId?.trim()) params.set('integration_id', integrationId.trim());
+    if (accountId?.trim()) params.set('account_id', accountId.trim());
     if (page) params.set('page', page);
     if (limit) params.set('limit', limit);
     const qs = params.toString();
@@ -1077,17 +1079,18 @@ export class ShortVideoController {
     if (platformAccountId) {
       const baseUrl = this.getBaseUrl();
       try {
-        const putBody: Record<string, unknown> = { config: accountConfig };
-        // 同步 persona_id 到顶层（short_video 已支持 config.persona_id 同步）
-        if (accountConfig.persona_id !== undefined) {
-          putBody.persona_id = accountConfig.persona_id;
-        }
-        // 存储 postiz 关联，用于集成删除时级联删除 platform_account
+        const configToSync = { ...accountConfig };
+        // 存储 postiz 关联到 config，用于 integration_id 过滤与集成删除时级联删除
         if (integrationId && org?.id) {
-          putBody.postiz = {
+          configToSync.postiz = {
             organization_id: org.id,
             integration_id: integrationId,
           };
+        }
+        const putBody: Record<string, unknown> = { config: configToSync };
+        // 同步 persona_id 到顶层（short_video 已支持 config.persona_id 同步）
+        if (accountConfig.persona_id !== undefined) {
+          putBody.persona_id = accountConfig.persona_id;
         }
         // 同步基础信息（保存时更新全部）
         if (body.name !== undefined && typeof body.name === 'string') putBody.name = body.name;

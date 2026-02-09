@@ -4,6 +4,7 @@ import React, { FC, useState, useEffect, useCallback, useImperativeHandle, useRe
 import clsx from 'clsx';
 import { useT } from '@gitroom/react/translation/get.transation.service.client';
 import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
+import { useToaster } from '@gitroom/react/toaster/toaster';
 import ImageWithFallback from '@gitroom/react/helpers/image.with.fallback';
 import { CollapsibleSection, WeightSlider, ToggleSwitch } from './platform-config-section';
 
@@ -26,6 +27,7 @@ export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSet
 }>(function ShortVideoIntegrationSettings({ integrationId, integrationIdentifier: propIntegrationIdentifier, platformAccountId: propAccountId, postizIntegrationId, integrationInfo, onClose, embedded }, ref) {
   const t = useT();
   const fetch = useFetch();
+  const toaster = useToaster();
   const [saving, setSaving] = useState(false);
   const [internalAccountId, setInternalAccountId] = useState('');
   const [platformAccounts, setPlatformAccounts] = useState<Array<{ id: string; name: string; platform: string; avatar_url?: string }>>([]);
@@ -43,8 +45,10 @@ export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSet
 
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams({ status: 'active', limit: '100' });
-    if (postizIntegrationId) params.set('integration_id', postizIntegrationId);
+    // 有 integration 时只拉当前账号；无则拉列表供选择
+    const hasIntegration = !!postizIntegrationId?.trim();
+    const params = new URLSearchParams({ status: 'active', limit: hasIntegration ? '1' : '100' });
+    if (hasIntegration) params.set('integration_id', postizIntegrationId!.trim());
     fetch(`/short-video/platform-accounts?${params}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -109,16 +113,22 @@ export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSet
       if (integrationInfo?.description) configWithAccount.description = integrationInfo.description;
       const res = await fetch('/short-video/integration-config', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(configWithAccount),
       });
       if (res.ok) {
         onClose();
         if (embedded) return;
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toaster.show((data as any)?.message || t('save_failed', '保存失败'), 'warning');
       }
+    } catch {
+      toaster.show(t('save_failed', '保存失败'), 'warning');
     } finally {
       setSaving(false);
     }
-  }, [fetch, onClose, effectiveAccountId, postizIntegrationId, integrationInfo]);
+  }, [fetch, onClose, effectiveAccountId, postizIntegrationId, integrationInfo, toaster, t]);
 
   return (
     <div className={embedded ? 'flex flex-col gap-[16px]' : 'w-[720px] max-w-full bg-newBgColorInner rounded-[16px] flex flex-col text-textColor'}>

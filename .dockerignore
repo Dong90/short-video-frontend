@@ -1,0 +1,34 @@
+# 关键：排除 node_modules，否则 COPY . 会覆盖容器内 pnpm install 的 Linux 版本
+# 导致 bcrypt 等原生模块 "invalid ELF header"（宿主机 macOS 编译的在 Linux 容器内不可用）
+node_modules
+**/node_modules
+
+# Build output
+dist
+**/dist
+.next
+**/.next
+tmp
+out-tsc
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Git & IDE
+.git
+.gitignore
+.idea
+.vscode
+*.md
+!README.md
+
+# OS
+.DS_Store
+
+# Logs & misc
+*.log
+coverage
+.nyc_output
+.nx

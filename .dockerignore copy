@@ -1,0 +1,32 @@
+# We want the docker builds to be clean, and as fast as possible. Don't send
+# any half-built stuff in the build context as a pre-caution (also saves copying
+# 180k files in node_modules that isn't used!).
+**/node_modules
+node_modules/*
+node_modules
+docker-data/*
+dist
+.nx
+**/.next
+/apps/frontend/.next
+/apps/backend/dist
+/apps/workers/dist
+/apps/cron/dist
+/apps/commands/dist
+.devcontainer
+**/.git
+**/*.md
+**/LICENSE
+**/npm-debug.log
+**/*.vscode
+.git
+.github
+reports
+# 减少构建上下文
+docs
+__tests__
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+.coverage

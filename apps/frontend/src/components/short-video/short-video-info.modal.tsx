@@ -25,6 +25,12 @@ interface ShortVideoTask {
   videoUrl?: string;
   errorMessage?: string;
   createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  cost?: number;
+  targetPlatform?: string;
+  contentType?: string;
+  progress?: { percentage?: number; current_step?: string | null };
 }
 
 interface IntegrationInfo {
@@ -91,12 +97,19 @@ export const ShortVideoInfoModal: FC<{
       const cfg = (cfgRes.ok ? await safeJson(cfgRes) : null) ?? {};
       const updated: Record<string, unknown> = { ...cfg, persona_id: selectedPersonaId || null, platform_account_id: selectedAccountId };
       if (integration?.id) updated.integration_id = integration.id;
-      await fetch('/short-video/integration-config', {
+      const res = await fetch('/short-video/integration-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated),
       });
-      toaster.show(t('persona_saved', '人设已保存到该账号'), 'success');
+      const data = await safeJson(res);
+      if (res.ok) {
+        toaster.show(t('persona_saved', '人设已保存到该账号'), 'success');
+      } else {
+        toaster.show((data as any)?.message || t('persona_save_failed', '保存失败'), 'warning');
+      }
+    } catch {
+      toaster.show(t('persona_save_failed', '保存失败'), 'warning');
     } finally {
       setSavingPersona(false);
     }
@@ -167,6 +180,16 @@ export const ShortVideoInfoModal: FC<{
     return 'queued';
   }, []);
 
+  const formatDateTime = useCallback((iso?: string) => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return iso;
+    }
+  }, []);
+
   const loadTasks = useCallback(async () => {
     if (!integration?.id) return;
     setLoadingTasks(true);
@@ -181,18 +204,27 @@ export const ShortVideoInfoModal: FC<{
       const data = await safeJson(res);
       if (!res.ok) throw new Error((data as any)?.message || '获取任务列表失败');
       const list = (data?.tasks ?? data?.items ?? []) || [];
-      const rows = list.map((task: Record<string, unknown>) => ({
-        id: String(task.id ?? ''),
-        idea: task.idea ? String(task.idea) : undefined,
-        integrationId: String(task.integration_id ?? integration.id),
-        integrationName: integration.name,
-        platformIdentifier: integration.identifier,
-        status: normalizeTaskStatus(String(task.status ?? '')),
-        workflowType: task.workflow_type ? String(task.workflow_type) : undefined,
-        videoUrl: task.video_url ? String(task.video_url) : undefined,
-        errorMessage: task.error_message ? String(task.error_message) : undefined,
-        createdAt: task.created_at ? String(task.created_at) : undefined,
-      }));
+      const rows = list.map((task: Record<string, unknown>) => {
+        const p = task.progress as Record<string, unknown> | undefined;
+        return {
+          id: String(task.id ?? ''),
+          idea: task.idea ? String(task.idea) : undefined,
+          integrationId: String(task.integration_id ?? integration.id),
+          integrationName: integration.name,
+          platformIdentifier: integration.identifier,
+          status: normalizeTaskStatus(String(task.status ?? '')),
+          workflowType: task.workflow_type ? String(task.workflow_type) : undefined,
+          videoUrl: task.video_url ? String(task.video_url) : undefined,
+          errorMessage: task.error_message ? String(task.error_message) : undefined,
+          createdAt: task.created_at ? String(task.created_at) : undefined,
+          startedAt: task.started_at ? String(task.started_at) : undefined,
+          completedAt: task.completed_at ? String(task.completed_at) : undefined,
+          cost: typeof task.cost === 'number' ? task.cost : undefined,
+          targetPlatform: task.target_platform ? String(task.target_platform) : undefined,
+          contentType: task.content_type ? String(task.content_type) : undefined,
+          progress: p ? { percentage: p.percentage as number, current_step: p.current_step as string | null } : undefined,
+        };
+      });
       setTasks(rows);
       setTasksTotal(Number(data?.total ?? rows.length));
       setTasksPages(Number(data?.pages ?? 1));
@@ -205,12 +237,13 @@ export const ShortVideoInfoModal: FC<{
     }
   }, [integration?.id, integration?.name, integration?.identifier, tasksPage, taskStatusFilter, normalizeTaskStatus, safeJson]);
 
-  // 加载平台账号列表（按 integration_id 筛选可只显示当前集成关联的账号）
+  // 加载平台账号：有 integration_id 时只拉当前账号；无则拉列表（兜底）
   useEffect(() => {
     let cancelled = false;
     setLoadingAccounts(true);
-    const params = new URLSearchParams({ status: 'active', limit: '100' });
-    if (integration?.id) params.set('integration_id', integration.id);
+    const integId = integration?.id?.trim();
+    const params = new URLSearchParams({ status: 'active', limit: integId ? '1' : '100' });
+    if (integId) params.set('integration_id', integId);
     fetch(`/short-video/platform-accounts?${params}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -235,7 +268,10 @@ export const ShortVideoInfoModal: FC<{
         });
         setPlatformAccounts(accs);
         if (accs.length > 0) {
-          const match = accs.find((a: { platform: string }) => a.platform === integration.identifier) || accs[0];
+          const plat = (integration?.identifier ?? '').toLowerCase();
+          const match = plat
+            ? accs.find((a: { platform: string }) => (a.platform || '').toLowerCase() === plat) || accs[0]
+            : accs[0];
           setSelectedAccountId(match.id);
         } else {
           setSelectedAccountId('');
@@ -319,7 +355,14 @@ export const ShortVideoInfoModal: FC<{
     return () => {
       cancelled = true;
     };
-  }, [integration.id, integration.name, integration.identifier, selectedAccountId, fetch, t, personaListRefresh]);
+  }, [integration.id, integration.name, integration.identifier, selectedAccountId, fetch, t, personaListRefresh, loadTasks]);
+
+  // 创作记录 tab 下，若有 processing 任务则每 4 秒刷新以更新进度
+  useEffect(() => {
+    if (tab !== 'tasks' || !tasks.some((t) => t.status === 'processing')) return;
+    const timer = setInterval(loadTasks, 4000);
+    return () => clearInterval(timer);
+  }, [tab, tasks, loadTasks]);
 
   const statusLabel = useCallback((status: ShortVideoTaskStatus) => {
     switch (status) {
@@ -439,17 +482,21 @@ export const ShortVideoInfoModal: FC<{
                 </div>
                 <div className="flex flex-col items-end gap-[4px] shrink-0">
                   <span className="text-[12px]">{t('video_mode', '视频模式')}</span>
-                  <ToggleSwitch checked={useFreeVideos} onChange={(v) => {
-                    setUseFreeVideos(v);
-                    const cfg = settingsRef.current?.getConfig?.() ?? {};
-                    settingsRef.current?.setConfig?.({ ...cfg, use_free_videos: v });
-                  }} />
+                  <ToggleSwitch
+                    checked={useFreeVideos}
+                    disabled={!selectedAccountId}
+                    onChange={(v) => {
+                      setUseFreeVideos(v);
+                      const cfg = settingsRef.current?.getConfig?.() ?? {};
+                      settingsRef.current?.setConfig?.({ ...cfg, use_free_videos: v });
+                    }}
+                  />
                   <span className="text-[11px] text-textItemBlur">{t('use_video_material', '使用视频素材')}</span>
                 </div>
               </div>
               {platformAccounts.length === 0 && !loadingAccounts && (
                 <div className="text-[12px] text-textItemBlur">
-                  {t('short_video_no_platform_account', '暂无关联的平台账号，请先保存短视频配置。')}
+                  {t('short_video_no_platform_account', '暂无关联的平台账号，请先连接频道后再配置短视频。')}
                 </div>
               )}
             </div>
@@ -639,10 +686,10 @@ export const ShortVideoInfoModal: FC<{
                   {tasks.map((task) => (
                     <div
                       key={task.id}
-                      className="px-[18px] py-[14px] text-[13px] flex flex-col gap-[8px] hover:bg-newBorder/20 transition-colors"
+                      className="px-[18px] py-[14px] text-[13px] flex flex-col gap-[10px] hover:bg-newBorder/20 transition-colors"
                     >
                       <div className="flex items-center justify-between gap-[12px]">
-                        <div className="flex items-center gap-[12px] min-w-0 flex-1">
+                        <div className="flex items-center gap-[12px] min-w-0 flex-1 flex-wrap">
                           <span className="font-[500] shrink-0">{task.integrationName}</span>
                           <span
                             className={clsx(
@@ -660,6 +707,16 @@ export const ShortVideoInfoModal: FC<{
                               {task.workflowType}
                             </span>
                           )}
+                          {task.targetPlatform && (
+                            <span className="text-[11px] text-textItemBlur shrink-0">
+                              {task.targetPlatform}
+                            </span>
+                          )}
+                          {task.contentType && (
+                            <span className="text-[11px] text-textItemBlur shrink-0">
+                              · {task.contentType}
+                            </span>
+                          )}
                         </div>
                         {task.videoUrl && (
                           <a
@@ -672,21 +729,55 @@ export const ShortVideoInfoModal: FC<{
                           </a>
                         )}
                       </div>
+                      {(task.status === 'processing' || task.status === 'queued') && task.progress && (
+                        <div className="flex flex-col gap-[4px]">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-textItemBlur">
+                              {task.progress.current_step
+                                ? t('short_video_current_step', '当前步骤') + ': ' + task.progress.current_step
+                                : t('short_video_waiting', '等待中...')}
+                            </span>
+                            <span className="text-textItemBlur">
+                              {task.progress.percentage ?? 0}%
+                            </span>
+                          </div>
+                          <div className="h-[4px] rounded-full bg-newBorder overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-[#612BD3] transition-all duration-300"
+                              style={{ width: `${Math.min(100, Math.max(0, task.progress.percentage ?? 0))}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {task.status === 'completed' && (
+                        <div className="h-[4px] rounded-full bg-newBorder overflow-hidden">
+                          <div className="h-full w-full rounded-full bg-green-500/50" />
+                        </div>
+                      )}
                       {task.idea && (
                         <div className="text-[12px] text-textItemBlur truncate" title={task.idea}>
                           {task.idea}
                         </div>
                       )}
                       {task.errorMessage && (
-                        <div className="text-[11px] text-red-400" title={task.errorMessage}>
+                        <div className="text-[11px] text-red-400 break-words" title={task.errorMessage}>
                           {task.errorMessage}
                         </div>
                       )}
-                      {task.createdAt && (
-                        <div className="text-[11px] text-textItemBlur">
-                          {task.createdAt}
-                        </div>
-                      )}
+                      <div className="flex flex-wrap gap-x-[16px] gap-y-[2px] text-[11px] text-textItemBlur">
+                        {task.createdAt && (
+                          <span>{t('created', '创建')}: {formatDateTime(task.createdAt)}</span>
+                        )}
+                        {task.startedAt && task.status !== 'queued' && (
+                          <span>{t('started', '开始')}: {formatDateTime(task.startedAt)}</span>
+                        )}
+                        {task.completedAt && (
+                          <span>{t('completed', '完成')}: {formatDateTime(task.completedAt)}</span>
+                        )}
+                        {typeof task.cost === 'number' && task.cost > 0 && (
+                          <span>{t('cost', '成本')}: ${task.cost.toFixed(4)}</span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

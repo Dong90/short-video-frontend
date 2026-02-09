@@ -53,6 +53,15 @@ services:
       - postiz-network
     restart: always
 
+  spotlight:
+    pull_policy: always
+    container_name: short-video-frontend-spotlight
+    ports:
+      - 8969:8969/tcp
+    image: ghcr.io/getsentry/spotlight:latest
+    networks:
+      - postiz-network
+
   temporal-elasticsearch:
     container_name: temporal-elasticsearch
     image: elasticsearch:7.17.27

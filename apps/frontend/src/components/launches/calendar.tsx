@@ -519,33 +519,9 @@ export const CalendarColumn: FC<{
   );
 
   const addModal = useCallback(async () => {
-    const set: any = !sets.length
-      ? undefined
-      : await new Promise((resolve) => {
-          modal.openModal({
-            title: t('select_set', 'Select a Set'),
-            closeOnClickOutside: true,
-            askClose: true,
-            closeOnEscape: true,
-            withCloseButton: true,
-            onClose: () => resolve('exit'),
-            children: (
-              <SetSelectionModal
-                sets={sets}
-                onSelect={(selectedSet) => {
-                  resolve(selectedSet);
-                  modal.closeAll();
-                }}
-                onContinueWithoutSet={() => {
-                  resolve(undefined);
-                  modal.closeAll();
-                }}
-              />
-            ),
-          });
-        });
-
-    if (set === 'exit') return;
+    // 集合改为自动选择（或跳过），不再弹出「选择集合」弹窗
+    const set: any =
+      !sets.length ? undefined : sets.length === 1 ? sets[0] : undefined;
 
     modal.openModal({
       id: 'add-edit-modal',

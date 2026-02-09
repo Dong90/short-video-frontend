@@ -29,7 +29,14 @@ const SHORT_VIDEO_PLATFORMS = new Set([
 
 @Injectable()
 export class ShortVideoSyncService {
+  private _lastSyncFailureReason: string | null = null;
+
   constructor(private _libSync: LibShortVideoSyncService) {}
+
+  /** 用于控制器返回具体失败原因 */
+  getLastSyncFailureReason(): string | null {
+    return this._lastSyncFailureReason;
+  }
 
   private getBaseUrl(): string {
     const url = process.env.SHORT_VIDEO_API_URL?.trim();
@@ -62,6 +69,9 @@ export class ShortVideoSyncService {
     name: string;
     picture?: string;
     provider: string;
+    /** Postiz 侧的原生账号 ID（如 YouTube channel_id），用于写入 short_video 的 account_id */
+    accountId?: string;
+    /** 兼容旧字段（内部使用），优先使用 accountId */
     internalId?: string;
   }): Promise<{ id?: string } | null> {
     const baseUrl = this.getBaseUrl();
@@ -81,14 +91,22 @@ export class ShortVideoSyncService {
         const cfg = (items[0].config || {}) as Record<string, unknown>;
         const updateBody: Record<string, unknown> = {
           name: params.name || items[0].name,
+          // 按 short_video 新版 API：postiz 为顶层字段，由后端合并进 config
+          postiz: {
+            organization_id: params.organizationId,
+            integration_id: params.integrationId,
+          },
+          // 其余配置仍通过 config 传递，避免覆盖已有字段
           config: {
             ...cfg,
-            postiz: {
-              organization_id: params.organizationId,
-              integration_id: params.integrationId,
-            },
-            avatar_url: params.picture ?? cfg.avatar_url,
+            avatar_url: params.picture ?? (cfg as any).avatar_url,
           },
+          // 若已有账号尚未写入 account_id，则补写一份（以原生 ID 为准）
+          ...(params.accountId
+            ? {
+                account_id: params.accountId,
+              }
+            : {}),
         };
         await axios.put(
           `${baseUrl}/api/v1/platform-accounts/${items[0].id}`,
@@ -102,12 +120,20 @@ export class ShortVideoSyncService {
         name: params.name || `Channel_${String(params.internalId || params.integrationId).slice(0, 16)}`,
         platform,
         status: 'active',
+        // postiz 顶层字段，short_video 会在服务端写入 config.postiz
+        postiz: {
+          organization_id: params.organizationId,
+          integration_id: params.integrationId,
+        },
+        // 平台原生 ID，写入 short_video 的 account_id 字段
+        ...(params.accountId
+          ? {
+              account_id: params.accountId,
+            }
+          : {}),
+        // config 仅携带平台和头像等基础配置
         config: {
           platform,
-          postiz: {
-            organization_id: params.organizationId,
-            integration_id: params.integrationId,
-          },
           avatar_url: params.picture || undefined,
         },
       };
@@ -124,6 +150,134 @@ export class ShortVideoSyncService {
     } catch (e: any) {
       console.warn(
         'ShortVideoSyncService.createPlatformAccountForIntegration failed:',
+        e?.response?.data?.detail || e?.message
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 同步平台账号：若已有按 integration_id 关联的则返回；若无则尝试关联同平台未关联账号；否则创建新账号
+   */
+  async syncPlatformAccountForIntegration(params: {
+    integrationId: string;
+    organizationId: string;
+    name: string;
+    picture?: string;
+    provider: string;
+    /** 平台原生账号 ID（如 YouTube channel_id），用于写入 account_id */
+    accountId?: string;
+  }): Promise<{ id: string } | null> {
+    this._lastSyncFailureReason = null;
+    const baseUrl = this.getBaseUrl();
+    if (!baseUrl) {
+      this._lastSyncFailureReason =
+        'SHORT_VIDEO_API_URL 未配置，请在环境变量中设置 short_video 后端地址';
+      console.warn('[syncPlatformAccountForIntegration]', this._lastSyncFailureReason);
+      return null;
+    }
+
+    const platform = this.getPlatformForProvider(params.provider);
+    if (!platform) {
+      this._lastSyncFailureReason = `当前平台 "${params.provider}" 不支持短视频同步，仅支持: youtube, youtube-channel, tiktok, instagram, douyin, bilibili`;
+      console.warn('[syncPlatformAccountForIntegration]', this._lastSyncFailureReason);
+      return null;
+    }
+
+    try {
+      // 1. 已有按 integration_id 关联的？
+      const listRes = await axios.get(
+        `${baseUrl}/api/v1/platform-accounts?integration_id=${encodeURIComponent(params.integrationId)}&limit=1`,
+        { timeout: 10000 }
+      );
+      const items = listRes?.data?.items ?? [];
+      if (items.length > 0 && items[0]?.id) return { id: items[0].id };
+
+      // 2. 拉取同平台账号，找未关联或可关联的（youtube 与 youtube_shorts 互通）
+      const platformsToTry = platform === 'youtube_shorts' ? ['youtube', 'youtube_shorts'] : [platform];
+      let all: any[] = [];
+      for (const p of platformsToTry) {
+        const allRes = await axios.get(
+          `${baseUrl}/api/v1/platform-accounts?platform=${encodeURIComponent(p)}&limit=50`,
+          { timeout: 10000 }
+        );
+        all = allRes?.data?.items ?? [];
+        if (all.length > 0) break;
+      }
+      for (const acc of all) {
+        const cfg = (acc.config || {}) as Record<string, unknown>;
+        const postiz = cfg?.postiz as { integration_id?: string } | undefined;
+        const linked = postiz?.integration_id;
+        if (!linked || linked === params.integrationId) {
+          const linkedResult = await this.linkPlatformAccountToIntegration({
+            platformAccountId: acc.id,
+            integrationId: params.integrationId,
+            organizationId: params.organizationId,
+          });
+          if (linkedResult) return linkedResult;
+        }
+      }
+
+      // 3. 创建新账号
+      const created = await this.createPlatformAccountForIntegration({
+        ...params,
+        // internalId 仅用于生成占位名，真实账号 ID 用 accountId
+        internalId: params.integrationId,
+      });
+      const createdId = created?.id ? { id: created.id } : null;
+      if (!createdId) {
+        this._lastSyncFailureReason =
+          'short_video 创建 platform_account 失败，请查看后端日志';
+      }
+      return createdId;
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || String(e);
+      this._lastSyncFailureReason = `short_video 请求失败: ${detail}`;
+      console.warn(
+        'ShortVideoSyncService.syncPlatformAccountForIntegration failed:',
+        detail
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 将已有的 platform_account 关联到 Postiz 集成（写入 config.postiz.integration_id）
+   * 用于历史账号或通过 short_video 独立创建的账号
+   */
+  async linkPlatformAccountToIntegration(params: {
+    platformAccountId: string;
+    integrationId: string;
+    organizationId: string;
+  }): Promise<{ id: string } | null> {
+    const baseUrl = this.getBaseUrl();
+    if (!baseUrl) return null;
+
+    try {
+      const getRes = await axios.get(
+        `${baseUrl}/api/v1/platform-accounts/${params.platformAccountId}`,
+        { timeout: 10000 }
+      );
+      const acc = getRes?.data;
+      if (!acc?.id) return null;
+
+      // 仅更新 postiz 顶层字段，由 short_video 后端合并到 config.postiz
+      const updateBody: Record<string, unknown> = {
+        postiz: {
+          organization_id: params.organizationId,
+          integration_id: params.integrationId,
+        },
+      };
+
+      await axios.put(
+        `${baseUrl}/api/v1/platform-accounts/${params.platformAccountId}`,
+        updateBody,
+        { timeout: 15000, headers: { 'Content-Type': 'application/json' } }
+      );
+      return { id: params.platformAccountId };
+    } catch (e: any) {
+      console.warn(
+        'ShortVideoSyncService.linkPlatformAccountToIntegration failed:',
         e?.response?.data?.detail || e?.message
       );
       return null;

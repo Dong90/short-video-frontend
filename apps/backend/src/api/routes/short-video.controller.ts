@@ -5,6 +5,7 @@ import { Organization } from '@prisma/client';
 import axios from 'axios';
 import { PrismaService } from '@gitroom/nestjs-libraries/database/prisma/prisma.service';
 import { IntegrationService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.service';
+import { ShortVideoSyncService } from '@gitroom/backend/services/short-video-sync.service';
 
 const SHORT_VIDEO_CONFIG_KEY = 'short_video_integration_config';
 /** 按账号存储时的 key 前缀 */
@@ -65,7 +66,8 @@ interface ShortVideoTaskDetails {
 export class ShortVideoController {
   constructor(
     private _prisma: PrismaService,
-    private _integrationService: IntegrationService
+    private _integrationService: IntegrationService,
+    private _shortVideoSync: ShortVideoSyncService
   ) {}
 
   private getBaseUrl() {
@@ -417,12 +419,23 @@ export class ShortVideoController {
           // 从 ov 中移除 config，避免重复处理
           const ovWithoutConfig = { ...ov };
           delete ovWithoutConfig.config;
-          
-          const ideaText =
+
+          // 统一创意文案：
+          // - 优先使用显式传入的 idea
+          // - 其次使用选题文案 topicText（包括 auto_topic 在后端生成后回写的场景）
+          // - 再次使用 hint
+          // - 对于 book_video 工作流允许留空，让 short_video 按本地书库自动生成
+          // - 仅在非 book_video 且前面都为空时使用英文兜底文案
+          const workflowType = ov.workflowType ?? baseConfig.workflow_type ?? 'short_video';
+          let ideaText =
             ov.idea ||
+            ov.topicText ||
             ov.hint ||
-            'Short video generated from Postiz';
-          
+            '';
+          if (!ideaText && workflowType !== 'book_video') {
+            ideaText = 'Short video generated from Postiz';
+          }
+
           const payload = {
             idea: Array.isArray(ideaText) ? (ideaText as string[])[0] : String(ideaText ?? '').trim(),
             environment_prompt: ov.environmentPrompt ?? baseConfig.environment_prompt ?? null,
@@ -478,12 +491,13 @@ export class ShortVideoController {
     }
   }
 
-  /** 代理：获取任务列表（与 short_video 对齐，支持 integration_id 过滤） */
+  /** 代理：获取任务列表（与 short_video 对齐，支持 integration_id / platform_account_id 过滤） */
   @Get('/tasks')
   async getTasks(
     @Query('status') status?: string,
     @Query('workflow_type') workflowType?: string,
     @Query('integration_id') integrationId?: string,
+    @Query('platform_account_id') platformAccountId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string
   ) {
@@ -492,6 +506,7 @@ export class ShortVideoController {
     if (status) params.set('status', status);
     if (workflowType) params.set('workflow_type', workflowType);
     if (integrationId) params.set('integration_id', integrationId);
+    if (platformAccountId) params.set('platform_account_id', platformAccountId);
     if (page) params.set('page', page);
     if (limit) params.set('limit', limit);
     const qs = params.toString();
@@ -902,6 +917,52 @@ export class ShortVideoController {
         'Failed to fetch platform accounts';
       throw new HttpException({ message }, statusCode);
     }
+  }
+
+  /** 同步平台账号：将当前集成关联到 short_video 的 platform_account（新建或关联已有） */
+  @Post('/sync-platform-account')
+  async syncPlatformAccount(
+    @GetOrgFromRequest() org: Organization,
+    @Body() body: { integration_id: string }
+  ) {
+    const integrationId = body?.integration_id?.trim();
+    if (!integrationId) {
+      throw new HttpException({ message: 'integration_id is required' }, 400);
+    }
+
+    const integrations = await this._integrationService.getIntegrationsList(org.id);
+    const integration = integrations.find((i) => i.id === integrationId);
+    if (!integration) {
+      throw new HttpException({ message: 'Integration not found' }, 404);
+    }
+
+    const provider = integration.providerIdentifier || '';
+    // 对于大部分平台，integration.internalId 即平台原生 ID（如 YouTube channel_id）
+    const nativeAccountId = (integration as any).internalId || undefined;
+    console.log('[sync-platform-account] called:', {
+      integrationId,
+      provider,
+      name: integration.name,
+    });
+    const result = await this._shortVideoSync.syncPlatformAccountForIntegration({
+      integrationId,
+      organizationId: org.id,
+      name: integration.name || '',
+      picture: integration.picture || undefined,
+      provider,
+      accountId: nativeAccountId,
+    });
+
+    if (!result?.id) {
+      const reason = this._shortVideoSync.getLastSyncFailureReason();
+      const message =
+        reason ||
+        'Failed to sync platform account. Check SHORT_VIDEO_API_URL and short_video service.';
+      console.warn('[sync-platform-account] failed:', { integrationId, provider, reason });
+      throw new HttpException({ message }, 500);
+    }
+    console.log('[sync-platform-account] success:', { integrationId, platform_account_id: result.id });
+    return { ok: true, platform_account_id: result.id };
   }
 
   /** 代理：获取平台账号详情（与 short_video 对齐） */

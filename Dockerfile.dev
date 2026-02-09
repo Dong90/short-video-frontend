@@ -41,7 +41,8 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY . /app
 COPY var/docker/nginx.conf /etc/nginx/nginx.conf
 COPY var/docker/start.sh /start.sh
-RUN chmod +x /start.sh
+COPY var/docker/start-dev.sh /start-dev.sh
+RUN chmod +x /start.sh /start-dev.sh
 # 注意：
 # - 为了减小单次内存峰值，这里改成“分步编译”：后端 → orchestrator → 前端，依次执行；
 # - 你的 Docker 已经调到 12G，这里统一给每一步 Node old-space 开到 6G，避免 2G 左右就 OOM；

@@ -1,0 +1,21 @@
+# 代码挂载开发模式：改代码后无需 rebuild，docker compose restart clipfactory 即可生效
+# Docker Compose 会自动合并此文件，直接运行 docker compose up -d 即可
+# 首次启动会执行 pnpm install（约 1–2 分钟），之后启动 dev 模式
+# 若 orchestrator OOM，请将 Docker 内存调至 6GB+ 或使用生产模式（去掉本 override）
+
+services:
+  clipfactory:
+    volumes:
+      - .:/app
+      # 避免宿主 node_modules 覆盖，使用独立 volume 保证容器内 Linux 依赖
+      - clipfactory-node-modules:/app/node_modules
+      - clipfactory-config:/config/
+      - clipfactory-uploads:/uploads/
+    command: ["/bin/bash", "-c", "chmod +x /start-dev.sh && /start-dev.sh"]
+    environment:
+      NODE_ENV: development
+      # 增加 Node 堆内存，避免 orchestrator 等 dev 进程 OOM
+      NODE_OPTIONS: "--max-old-space-size=4096"
+
+volumes:
+  clipfactory-node-modules:

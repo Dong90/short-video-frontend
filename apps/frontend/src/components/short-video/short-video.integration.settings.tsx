@@ -11,6 +11,8 @@ import { CollapsibleSection, WeightSlider, ToggleSwitch } from './platform-confi
 export interface ShortVideoIntegrationSettingsRef {
   getConfig: () => Record<string, unknown>;
   setConfig: (c: Record<string, unknown>) => void;
+  /** 由父级触发保存，用于 embedded 模式统一底部按钮 */
+  save: () => Promise<void>;
 }
 
 export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSettingsRef, {
@@ -33,11 +35,6 @@ export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSet
   const [platformAccounts, setPlatformAccounts] = useState<Array<{ id: string; name: string; platform: string; avatar_url?: string }>>([]);
   const shortVideoTabRef = React.useRef<{ getConfig: () => Record<string, unknown>; setConfig: (c: Record<string, unknown>) => void } | null>(null);
   const [topUseFreeVideos, setTopUseFreeVideos] = useState(true);
-
-  useImperativeHandle(ref, () => ({
-    getConfig: () => shortVideoTabRef.current?.getConfig?.() ?? {},
-    setConfig: (c) => shortVideoTabRef.current?.setConfig?.(c),
-  }), []);
 
   // short_video 默认使用 youtube 平台
   const integrationIdentifier = propIntegrationIdentifier ?? (integrationId === 'short_video' ? 'youtube' : undefined);
@@ -130,6 +127,16 @@ export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSet
     }
   }, [fetch, onClose, effectiveAccountId, postizIntegrationId, integrationInfo, toaster, t]);
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      getConfig: () => shortVideoTabRef.current?.getConfig?.() ?? {},
+      setConfig: (c) => shortVideoTabRef.current?.setConfig?.(c),
+      save: () => handleSave(),
+    }),
+    [handleSave],
+  );
+
   return (
     <div className={embedded ? 'flex flex-col gap-[16px]' : 'w-[720px] max-w-full bg-newBgColorInner rounded-[16px] flex flex-col text-textColor'}>
       {!embedded && (
@@ -214,18 +221,6 @@ export const ShortVideoIntegrationSettings = forwardRef<ShortVideoIntegrationSet
           >
             {t('cancel', '取消')}
           </button>
-          <button
-            type="button"
-            className="h-[32px] px-[16px] rounded-[8px] bg-[#612BD3] text-[13px] font-[600] text-white disabled:opacity-60"
-            onClick={handleSave}
-            disabled={saving || !effectiveAccountId}
-          >
-            {saving ? t('saving', '保存中…') : t('save', '保存')}
-          </button>
-        </div>
-      )}
-      {embedded && (
-        <div className="flex justify-end">
           <button
             type="button"
             className="h-[32px] px-[16px] rounded-[8px] bg-[#612BD3] text-[13px] font-[600] text-white disabled:opacity-60"

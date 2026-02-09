@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Postiz Docker 启动脚本
+# ClipFactory Docker 启动脚本
 
 set -e
 
-echo "🚀 启动 Postiz Docker 服务..."
+echo "🚀 启动 ClipFactory Docker 服务..."
 
 # 检查 Docker 是否运行
 if ! docker ps > /dev/null 2>&1; then
@@ -14,7 +14,7 @@ fi
 
 # 先启动基础服务
 echo "📦 启动基础服务（PostgreSQL, Redis, Temporal）..."
-docker compose up -d postiz-postgres postiz-redis temporal-elasticsearch temporal-postgresql temporal temporal-ui spotlight
+docker compose up -d clipfactory-postgres clipfactory-redis temporal-elasticsearch temporal-postgresql temporal temporal-ui spotlight
 
 # 等待服务就绪
 echo "⏳ 等待服务启动..."
@@ -26,11 +26,11 @@ docker compose ps
 
 # 构建并启动应用（如果需要）
 if [ "$1" == "--build" ]; then
-    echo "🔨 构建 Postiz 应用镜像..."
-    docker compose build postiz
+    echo "🔨 构建 ClipFactory 应用镜像..."
+    docker compose build clipfactory
     
-    echo "🚀 启动 Postiz 应用..."
-    docker compose up -d postiz
+    echo "🚀 启动 ClipFactory 应用..."
+    docker compose up -d clipfactory
 else
     echo "💡 提示: 使用 --build 参数来构建应用镜像"
     echo "   例如: ./start-docker.sh --build"
@@ -40,11 +40,11 @@ echo ""
 echo "✅ 服务启动完成！"
 echo ""
 echo "📋 访问地址："
-echo "   - Postiz 前端: http://localhost:4007"
+echo "   - ClipFactory 前端: http://localhost:4007"
 echo "   - Temporal UI: http://localhost:8080"
 echo "   - PGAdmin: http://localhost:8081 (admin@admin.com / admin)"
 echo "   - Redis Insight: http://localhost:5540"
 echo "   - Spotlight:     http://localhost:8969"
 echo ""
-echo "📊 查看日志: docker compose logs -f postiz"
+echo "📊 查看日志: docker compose logs -f clipfactory"
 echo "🛑 停止服务: docker compose down"

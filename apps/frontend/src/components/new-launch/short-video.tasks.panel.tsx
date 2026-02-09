@@ -88,7 +88,8 @@ export const ShortVideoTasksPanel: FC = () => {
   const [loadingPersonas, setLoadingPersonas] = useState(false);
   const [bookVideoContentMode, setBookVideoContentMode] = useState<'db' | 'rsshub' | 'external'>('db');
   // 选题逻辑：short_video 与 book_video 共用
-  const [topicMode, setTopicMode] = useState<'auto_topic' | 'manual_topic'>('auto_topic');
+  // book_video 额外支持 auto_select（自动选书）
+  const [topicMode, setTopicMode] = useState<'auto_topic' | 'manual_topic' | 'auto_select'>('auto_topic');
   const [topicText, setTopicText] = useState('');
   const [bookVideoCategory, setBookVideoCategory] = useState('');
   const [bookVideoSourceTags, setBookVideoSourceTags] = useState<string[]>([]);
@@ -263,12 +264,26 @@ export const ShortVideoTasksPanel: FC = () => {
       }
     }
     
-    // 选题逻辑：short_video 与 book_video 统一传递
-    if (topicMode === 'manual_topic' && topicText?.trim()) {
-      taskData.topic_mode = 'manual_topic';
-      taskData.topic_text = topicText.trim();
+    // 选题 / 选书逻辑：short_video 与 book_video 统一传递
+    if (isBookVideo && bookVideoContentMode === 'db') {
+      if (topicMode === 'manual_topic' && topicText?.trim()) {
+        taskData.topic_mode = 'manual_topic';
+        taskData.topic_text = topicText.trim();
+      } else if (topicMode === 'auto_select') {
+        // book_video：仅按分类自动选书，由后端根据 category/source_tags 选择书籍
+        taskData.topic_mode = 'auto_select';
+      } else {
+        // 默认自动选题（后端会根据分类和书库生成选题）
+        taskData.topic_mode = 'auto_topic';
+      }
     } else {
-      taskData.topic_mode = 'auto_topic';
+      // short_video 或其他内容来源：保持原有 auto_topic/manual_topic 行为
+      if (topicMode === 'manual_topic' && topicText?.trim()) {
+        taskData.topic_mode = 'manual_topic';
+        taskData.topic_text = topicText.trim();
+      } else {
+        taskData.topic_mode = 'auto_topic';
+      }
     }
     
     // content_type（如果设置了且不为 'account'）
@@ -851,8 +866,8 @@ export const ShortVideoTasksPanel: FC = () => {
                     </label>
                   )}
                   <label className="flex flex-col gap-[4px] text-[12px]">
-                    <span>{t('topic_mode', '选题模式')}</span>
-                    <div className="flex gap-[8px]">
+                    <span>{t('topic_mode', '选题 / 选书模式')}</span>
+                    <div className="flex gap-[8px] flex-wrap">
                       <label className="flex items-center gap-[4px]">
                         <input
                           type="radio"
@@ -870,6 +885,15 @@ export const ShortVideoTasksPanel: FC = () => {
                           onChange={() => setTopicMode('manual_topic')}
                         />
                         <span>{t('manual_topic', '手动选题')}</span>
+                      </label>
+                      <label className="flex items-center gap-[4px]">
+                        <input
+                          type="radio"
+                          name="bookVideoTopicMode"
+                          checked={topicMode === 'auto_select'}
+                          onChange={() => setTopicMode('auto_select')}
+                        />
+                        <span>{t('auto_select_book', '自动选书')}</span>
                       </label>
                     </div>
                   </label>

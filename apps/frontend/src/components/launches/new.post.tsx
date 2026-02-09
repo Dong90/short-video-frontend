@@ -17,35 +17,9 @@ export const NewPost = () => {
   const createAPost = useCallback(async () => {
     const date = (await (await fetch('/posts/find-slot')).json()).date;
 
-    const set: any = !sets.length
-      ? undefined
-      : await new Promise((resolve) => {
-          modal.openModal({
-            title: t('select_set', 'Select a Set'),
-            closeOnClickOutside: true,
-            closeOnEscape: true,
-            withCloseButton: false,
-            onClose: () => resolve('exit'),
-            classNames: {
-              modal: 'text-textColor',
-            },
-            children: (
-              <SetSelectionModal
-                sets={sets}
-                onSelect={(selectedSet) => {
-                  resolve(selectedSet);
-                  modal.closeAll();
-                }}
-                onContinueWithoutSet={() => {
-                  resolve(undefined);
-                  modal.closeAll();
-                }}
-              />
-            ),
-          });
-        });
-
-    if (set === 'exit') return;
+    // 集合改为自动选择（或跳过），不再弹出「选择集合」弹窗
+    const set: any =
+      !sets.length ? undefined : sets.length === 1 ? sets[0] : undefined;
 
     modal.openModal({
       id: 'add-edit-modal',

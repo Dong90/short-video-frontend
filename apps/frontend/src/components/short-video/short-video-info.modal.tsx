@@ -62,7 +62,17 @@ export const ShortVideoInfoModal: FC<{
   const toaster = useToaster();
 
   const [tab, setTab] = useState<ShortVideoInfoTab>('platform');
-  const [platformAccounts, setPlatformAccounts] = useState<Array<{ id: string; name: string; platform: string; avatar_url?: string; account_url?: string; description?: string }>>([]);
+  const [platformAccounts, setPlatformAccounts] = useState<
+    Array<{
+      id: string;
+      name: string;
+      platform: string;
+      avatar_url?: string;
+      account_url?: string;
+      description?: string;
+      account_id?: string;
+    }>
+  >([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [tasks, setTasks] = useState<ShortVideoTask[]>([]);
@@ -79,12 +89,11 @@ export const ShortVideoInfoModal: FC<{
   const [loadingPersona, setLoadingPersona] = useState(false);
   const [savingPersona, setSavingPersona] = useState(false);
   const [useFreeVideos, setUseFreeVideos] = useState(true);
+  const [syncingAccount, setSyncingAccount] = useState(false);
+  const [accountsRefreshKey, setAccountsRefreshKey] = useState(0);
   const settingsRef = useRef<ShortVideoIntegrationSettingsRef>(null);
-
-  /** 内嵌模式下保存成功后的回调：仅显示 toast，不关闭父级弹窗 */
-  const onEmbeddedSaveSuccess = useCallback(() => {
-    toaster.show(t('short_video_config_saved', '短视频配置已保存'), 'success');
-  }, [toaster, t]);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const hasAutoSyncedRef = useRef(false);
 
   const safeJson = useCallback(async (res: Response) => {
     try {
@@ -124,6 +133,27 @@ export const ShortVideoInfoModal: FC<{
       setSavingPersona(false);
     }
   }, [selectedPersonaId, selectedAccountId, integration?.id, fetch, safeJson, toaster, t]);
+
+  /** 内嵌模式下保存成功后的回调：统一在底部一个按钮里保存所有配置（人设 + 短视频配置） */
+  const onEmbeddedSaveSuccess = useCallback(() => {
+    // 若已选择人设，则一并保存到账号，避免需要单独点「保存到账号」
+    if (selectedPersonaId) {
+      // 异步触发，人设保存内部会自行处理 toast 提示
+      void savePersona();
+    }
+    toaster.show(t('short_video_config_saved', '短视频配置已保存'), 'success');
+  }, [selectedPersonaId, savePersona, toaster, t]);
+
+  /** 账号配置底部统一保存按钮：调用内嵌短视频配置组件的 save */
+  const handleSaveAll = useCallback(async () => {
+    if (!settingsRef.current) return;
+    setSavingConfig(true);
+    try {
+      await settingsRef.current.save();
+    } finally {
+      setSavingConfig(false);
+    }
+  }, []);
 
   const refreshPersonas = useCallback(() => {
     setPersonaListRefresh((v) => v + 1);
@@ -210,6 +240,12 @@ export const ShortVideoInfoModal: FC<{
         page: String(tasksPage),
       });
       if (taskStatusFilter) params.set('status', taskStatusFilter);
+      // 1 对 1：当前集成只会有一个平台账号
+      // 若用户没手动选择，则默认用第一个账号 ID 进行过滤
+      const accountIdForFilter = selectedAccountId || platformAccounts[0]?.id || '';
+      if (accountIdForFilter) {
+        params.set('platform_account_id', accountIdForFilter);
+      }
       const res = await fetch(`/short-video/tasks?${params.toString()}`);
       const data = await safeJson(res);
       if (!res.ok) throw new Error((data as any)?.message || '获取任务列表失败');
@@ -257,7 +293,7 @@ export const ShortVideoInfoModal: FC<{
     } finally {
       setLoadingTasks(false);
     }
-  }, [integration?.id, integration?.name, integration?.identifier, tasksPage, taskStatusFilter, normalizeTaskStatus, safeJson]);
+  }, [integration?.id, integration?.name, integration?.identifier, selectedAccountId, platformAccounts, tasksPage, taskStatusFilter, normalizeTaskStatus, safeJson]);
 
   // 加载平台账号：有 integration_id 时只拉当前账号；无则拉列表（兜底）
   useEffect(() => {
@@ -286,6 +322,7 @@ export const ShortVideoInfoModal: FC<{
             avatar_url: pickAvatar(a),
             account_url: (typeof a.account_url === 'string' ? a.account_url : cfg.account_url)?.trim() || undefined,
             description: (typeof a.description === 'string' ? a.description : cfg.description)?.trim() || undefined,
+            account_id: (typeof a.account_id === 'string' ? a.account_id : cfg.account_id)?.trim() || undefined,
           };
         });
         setPlatformAccounts(accs);
@@ -305,7 +342,29 @@ export const ShortVideoInfoModal: FC<{
     return () => {
       cancelled = true;
     };
-  }, [integration?.id, integration?.identifier]);
+  }, [integration?.id, integration?.identifier, accountsRefreshKey]);
+
+  /** 打开弹窗时若无平台账号则自动同步一次 */
+  useEffect(() => {
+    if (!integration?.id || loadingAccounts || platformAccounts.length > 0 || hasAutoSyncedRef.current) return;
+    hasAutoSyncedRef.current = true;
+    setSyncingAccount(true);
+    fetch('/short-video/sync-platform-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ integration_id: integration.id }),
+    })
+      .then((r) => (r.ok ? r.json() : r.json().then((d: any) => { throw new Error(d?.message || '同步失败'); })))
+      .then(() => {
+        toaster.show(t('short_video_sync_success', '平台账号已同步'), 'success');
+        setAccountsRefreshKey((k) => k + 1);
+      })
+      .catch((e: unknown) => {
+        hasAutoSyncedRef.current = false;
+        toaster.show((e as Error)?.message || t('short_video_sync_failed', '同步失败'), 'error');
+      })
+      .finally(() => setSyncingAccount(false));
+  }, [integration?.id, loadingAccounts, platformAccounts.length, fetch, toaster, t]);
 
   // 加载平台账号配置（用于平台 tab 的视频模式开关）
   useEffect(() => {
@@ -317,6 +376,10 @@ export const ShortVideoInfoModal: FC<{
         if (cancelled) return;
         const v = d?.use_free_videos;
         setUseFreeVideos(v === false ? false : true);
+        // 将账号配置下发给下方「短视频配置」区域，自动填充所有字段
+        if (d && typeof d === 'object') {
+          settingsRef.current?.setConfig?.(d as Record<string, unknown>);
+        }
       });
     return () => { cancelled = true; };
   }, [selectedAccountId, fetch]);
@@ -477,6 +540,15 @@ export const ShortVideoInfoModal: FC<{
                     </div>
                     {selectedAccountId && (() => {
                       const acc = platformAccounts.find((a) => a.id === selectedAccountId);
+                      if (!acc) return null;
+                      return (
+                        <div className="text-[11px] text-textItemBlur">
+                          {t('short_video_platform_account_id', '平台账号 ID')}: {acc.account_id || acc.id}
+                        </div>
+                      );
+                    })()}
+                    {selectedAccountId && (() => {
+                      const acc = platformAccounts.find((a) => a.id === selectedAccountId);
                       const url = acc?.account_url;
                       if (!url || !url.startsWith('http')) return null;
                       return (
@@ -518,7 +590,9 @@ export const ShortVideoInfoModal: FC<{
               </div>
               {platformAccounts.length === 0 && !loadingAccounts && (
                 <div className="text-[12px] text-textItemBlur">
-                  {t('short_video_no_platform_account', '暂无关联的平台账号，请先连接频道后再配置短视频。')}
+                  {syncingAccount
+                    ? t('syncing', '同步中…')
+                    : t('short_video_no_platform_account', '暂无关联的平台账号，请先连接频道后再配置短视频。')}
                 </div>
               )}
             </div>
@@ -543,16 +617,6 @@ export const ShortVideoInfoModal: FC<{
                           <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                       </select>
-                      {selectedPersonaId && (
-                        <button
-                          type="button"
-                          onClick={savePersona}
-                          disabled={savingPersona}
-                          className="h-[36px] px-[16px] rounded-[8px] bg-[#612BD3] text-[13px] font-[500] text-white disabled:opacity-60 hover:opacity-90 shrink-0"
-                        >
-                          {savingPersona ? t('saving', '保存中…') : t('save_persona_to_account', '保存到账号')}
-                        </button>
-                      )}
                     </div>
                     <button
                       type="button"
@@ -646,7 +710,7 @@ export const ShortVideoInfoModal: FC<{
               )}
             </CollapsibleSection>
 
-            {/* 3. 短视频配置 */}
+            {/* 3. 短视频配置（内嵌组件由底部统一保存按钮触发保存） */}
             <ShortVideoIntegrationSettings
               ref={settingsRef}
               integrationId="short_video"
@@ -657,6 +721,16 @@ export const ShortVideoInfoModal: FC<{
               onClose={onEmbeddedSaveSuccess}
               embedded
             />
+            <div className="mt-[16px] flex justify-end">
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                disabled={savingConfig || !selectedAccountId}
+                className="h-[36px] px-[16px] rounded-[8px] bg-[#612BD3] text-[13px] font-[500] text-white disabled:opacity-60 hover:opacity-90"
+              >
+                {savingConfig ? t('saving', '保存中…') : t('save', '保存')}
+              </button>
+            </div>
           </div>
         )}
 
@@ -763,15 +837,76 @@ export const ShortVideoInfoModal: FC<{
                               {task.progress.percentage ?? 0}%
                             </span>
                           </div>
-                          <div className="h-[4px] rounded-full bg-newBorder overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-[#612BD3] transition-all duration-300"
-                              style={{ width: `${Math.min(100, Math.max(0, task.progress.percentage ?? 0))}%` }}
-                            />
-                          </div>
+                          {/* 若有步骤信息，则用步骤节点展示进度；否则回退到普通进度条 */}
+                          {task.steps && task.steps.length > 0 ? (
+                            <div className="flex items-center gap-[4px] mt-[2px]">
+                              {task.steps.map((s, idx) => {
+                                const isCompleted = s.status === 'completed';
+                                const isCurrent = s.status === 'processing';
+                                const isFailed = s.status === 'failed';
+                                const dotColor = isFailed
+                                  ? 'bg-red-500'
+                                  : isCompleted
+                                    ? 'bg-green-500'
+                                    : isCurrent
+                                      ? 'bg-[#612BD3]'
+                                      : 'bg-newBorder';
+                                const lineActive =
+                                  idx > 0 &&
+                                  ['completed', 'processing'].includes(task.steps[idx - 1]?.status || '');
+                                return (
+                                  <React.Fragment key={`${s.step_name}-${idx}`}>
+                                    {idx > 0 && (
+                                      <div
+                                        className={clsx(
+                                          'h-[2px] flex-1 rounded-full',
+                                          lineActive ? 'bg-[#612BD3]' : 'bg-newBorder'
+                                        )}
+                                      />
+                                    )}
+                                    <div className="flex flex-col items-center min-w-0">
+                                      <div
+                                        className={clsx(
+                                          'w-[10px] h-[10px] rounded-full border border-newBorder',
+                                          dotColor
+                                        )}
+                                      />
+                                      <div className="mt-[2px] max-w-[80px] text-[10px] text-textItemBlur truncate">
+                                        {s.step_name}
+                                      </div>
+                                    </div>
+                                  </React.Fragment>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="h-[4px] rounded-full bg-newBorder overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-[#612BD3] transition-all duration-300"
+                                style={{ width: `${Math.min(100, Math.max(0, task.progress.percentage ?? 0))}%` }}
+                              />
+                            </div>
+                          )}
                         </div>
                       )}
-                      {task.status === 'completed' && (
+                      {task.status === 'completed' && task.steps && task.steps.length > 0 && (
+                        <div className="flex items-center gap-[4px] mt-[2px]">
+                          {task.steps.map((s, idx) => (
+                            <React.Fragment key={`${s.step_name}-${idx}`}>
+                              {idx > 0 && (
+                                <div className="h-[2px] flex-1 rounded-full bg-green-500/50" />
+                              )}
+                              <div className="flex flex-col items-center min-w-0">
+                                <div className="w-[10px] h-[10px] rounded-full bg-green-500 border border-green-500" />
+                                <div className="mt-[2px] max-w-[80px] text-[10px] text-textItemBlur truncate">
+                                  {s.step_name}
+                                </div>
+                              </div>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      )}
+                      {task.status === 'completed' && (!task.steps || task.steps.length === 0) && (
                         <div className="h-[4px] rounded-full bg-newBorder overflow-hidden">
                           <div className="h-full w-full rounded-full bg-green-500/50" />
                         </div>
